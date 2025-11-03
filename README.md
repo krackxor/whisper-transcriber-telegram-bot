@@ -29,7 +29,8 @@ Can be safely installed and deployed with [Docker](https://www.docker.com/) by u
    - _(auto-switching to CPU-only mode if no CUDA GPU is available)_
 - 📝 Transcribes audio using OpenAI's Whisper model (can be user-selected with `/model`)
    - _(see [openai/whisper](https://github.com/openai/whisper/) for more info on Whisper)_
-- 📄 Returns transcription in text, SRT, and VTT formats
+- 📄 Returns transcription as messages and/or in TXT, SRT, and VTT formats (user configurable)
+   - Plaintext (TXT) outputs can be configured to include video description and/or timestamps
 - 🔄 Handles concurrent transcription requests efficiently with async & task queuing
 - 🕒 Features an asynchronous automatic queue system to manage multiple transcription requests seamlessly
 
@@ -219,6 +220,33 @@ If you just need to see the options and help, type:
 ```
 
 ## Changes
+- v0.1717.1 - Language selection _(small tweak)_
+   - Language can now be shorthand-selected with `/lang` in addition to `/language`
+- v0.1717 - **Timestamp formatting fixes & dynamic hour display**
+  - Fixed a bug where `_timestamped.txt` files would incorrectly drop the hour from timestamps (e.g., a timestamp of `1:23:45` would appear as `[23:45]`).
+  - Introduced dynamic timestamp formatting, which is on by default. Timestamps for moments under the one-hour mark are now shown in a shortened `[mm:ss]` format. Once a transcription passes the one-hour mark, timestamps automatically switch to the full `[hh:mm:ss]` format within the same file.
+  - This behavior is controlled by the new `shorten_timestamps_under_one_hour` flag in `config.ini` and is set to `true` by default. Set it to `false` to force the full `[hh:mm:ss]` format for all timestamps.
+  - Added a log message to confirm which formatting mode is active when generating the timestamped file.
+- v0.1716 - **NEW: Configurable per-domain yt-dlp arguments**
+  - Added new `[YTDLPSettings]` config options:
+    - `use_special_commands_for_domains = true` (set to `true` to enable)
+    - `special_domain_commands = ...` (multiline string)  
+  - Lets you specify domain-specific yt-dlp arguments (e.g., `--http-chunk-size 0 --downloader native`) for problematic sites like Rumble, BitChute, Odysee, etc.
+  - (list can be expanded by the user in `config.ini` as needed)   
+  - This approach solves repeated “Separator not found” or TCP/SSL connection errors by applying fallback flags/headers strictly to domains known to need them—without affecting other sites or default performance.
+  - The bot automatically detects if the domain portion of the URL matches your `special_domain_commands` and injects those extra yt-dlp flags into the download process, eliminating chunking/SSL issues specific to that site.
+- v0.1715 - **Timestamped TXT Output & Startup Ping Logging**
+   - Added new config option `send_timestamped_txt` under `[TranscriptionSettings]` in `config.ini`.
+   - If `sendasfiles = true` and `send_timestamped_txt = true`, the bot now generates and sends an additional `*_timestamped.txt` file along with the standard `.txt`, `.srt`, and `.vtt` files.
+   - This timestamped file contains the transcription with `[mm:ss]` prefixes for each line, derived from the SRT timings.
+   - Added logging confirmation when the startup "hello" message (`ping_owners_on_start = true`) is enabled and attempted to be sent to owner IDs.   
+- v0.1714 - **More fixes**
+   - Graceful passing of description fetching errors
+      => (`yt-dlp` pushes onward w/ warnings if the description fetch yielded errors)
+   - Default client behavior changed to suit YouTube better when using `yt-dlp` (Android client in custom `yt-dlp` arguments as default in `config.ini`)
+   - Added `[Delays]` section to `config.ini`
+      => Set up delays between description and video fetching to avoid snags; user configurable delay times
+   - Version number now visible on startup hello (if enabled for bot owner[s])
 - v0.1713 - Added customizable `yt-dlp` commands to `config.ini` under `custom_yt_dlp_args`
    - Leave the entry blank if you don't want any custom commands to be added.
    - Adding custom commands might help with some sites that have i.e. chunking problems during download, or if you need to tweak something, etc.

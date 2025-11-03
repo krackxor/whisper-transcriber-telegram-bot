@@ -40,6 +40,20 @@ class ConfigLoader:
             cls()
         return cls._config
 
+    @classmethod
+    def get_transcription_settings(cls):
+        config = cls.get_config()
+        transcription_settings = {
+            'include_header': config.getboolean('TranscriptionSettings', 'includeheaderintranscription', fallback=False),
+            'keep_audio_files': config.getboolean('TranscriptionSettings', 'keepaudiofiles', fallback=False),
+            'send_as_files': config.getboolean('TranscriptionSettings', 'sendasfiles', fallback=True),
+            'send_timestamped_txt': config.getboolean('TranscriptionSettings', 'send_timestamped_txt', fallback=False), # ADDED, default to False
+            'shorten_timestamps_under_one_hour': config.getboolean('TranscriptionSettings', 'shorten_timestamps_under_one_hour', fallback=True), # ADDED THIS LINE in v0.1717            
+            'send_as_messages': config.getboolean('TranscriptionSettings', 'sendasmessages', fallback=False),
+        }
+        logger.info(f"Loaded transcription settings: {transcription_settings}")
+        return transcription_settings
+
     # NEW: Method to get Notification Settings
     @classmethod
     def get_notification_settings(cls):
@@ -119,6 +133,37 @@ class ConfigLoader:
             'active': active,
             'domains': domain_list
         }
+
+    @classmethod
+    def get_special_domain_commands(cls):
+        """
+        Returns a dict of domain -> custom yt-dlp argument string,
+        parsed from 'special_domain_commands' in the [YTDLPSettings] section.
+        """
+        config = cls.get_config()
+
+        # Only parse them if usage is enabled
+        enabled = config.getboolean("YTDLPSettings", "use_special_commands_for_domains", fallback=False)
+        if not enabled:
+            return {}  # No special commands if disabled
+
+        raw = config.get("YTDLPSettings", "special_domain_commands", fallback="").strip()
+        if not raw:
+            return {}
+
+        commands = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            # Skip empty lines or comment lines if you want
+            if not line or line.startswith("#"):
+                continue
+            if '|' not in line:
+                continue
+            domain, args = line.split('|', 1)
+            domain = domain.strip().lower()
+            args = args.strip()
+            commands[domain] = args
+        return commands
 
     # get the owner ID's and ping on startup if needed
     @classmethod

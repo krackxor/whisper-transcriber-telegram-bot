@@ -20,6 +20,7 @@ import textwrap
 import configparser
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta
+from shlex import split as shlex_split
 # import wave
 from pydub import AudioSegment
 
@@ -239,13 +240,27 @@ async def download_audio(url, audio_path):
         else:
             logger.warning(f"Cookies file not found: {cookies_file}")
 
+    # <<< ADDED FOR SPECIAL DOMAIN CMDS >>>
+    # load special domain commands from config
+    special_commands = ConfigLoader.get_special_domain_commands()
+
     parsed_url = urlparse(url)
     domain = parsed_url.netloc.lower()
     if domain.startswith('www.'):
         domain = domain[4:]  # Remove 'www.'
 
+    # If domain is in special_commands, parse them into a list
+    domain_args = []
+    if domain in special_commands:
+        logger.info(f"Applying special yt-dlp args for domain '{domain}': {special_commands[domain]}")
+        domain_args = shlex.split(special_commands[domain])
+
     should_download_video = ytdlp_settings['active'] and domain in ytdlp_settings['domains']
 
+    # ---------------------------------------------------
+    #                 VIDEO DOWNLOAD PATH
+    # ---------------------------------------------------
+  
     if should_download_video:
         logger.info("Identified domain requiring full video download.")
         # Step 1: Get available formats in JSON
@@ -256,14 +271,15 @@ async def download_audio(url, audio_path):
             url
         ]
 
-        # If there are custom args, parse them into a list and extend the command
+        # <<< ADDED FOR SPECIAL DOMAIN CMDS >>>
+        # Insert domain-specific args right after "yt-dlp"
+        if domain_args:
+            command[1:1] = domain_args
+
         if extra_args_str:
             extra_args_list = shlex.split(extra_args_str)
             logger.info(f"Using custom yt-dlp arguments from config: {extra_args_list}")
-            # Insert them right after 'yt-dlp':
             command[1:1] = extra_args_list
-            # Or place them at the end:
-            # command.extend(extra_args_list)
 
         # Apply cache settings based on config
         if no_cache_dir:
@@ -356,14 +372,25 @@ async def download_audio(url, audio_path):
             url
         ]
 
-        # If there are custom args, parse them into a list and extend the command
+        # <<< ADDED FOR SPECIAL DOMAIN CMDS >>>
+        # Insert domain_args, then extra_args_str if present
+        if domain_args:
+            command[1:1] = domain_args
+
         if extra_args_str:
             extra_args_list = shlex.split(extra_args_str)
             logger.info(f"Using custom yt-dlp arguments from config: {extra_args_list}")
-            # Insert them right after 'yt-dlp':
             command[1:1] = extra_args_list
-            # Or place them at the end:
-            # command.extend(extra_args_list)
+
+        # # // old method
+        # # If there are custom args, parse them into a list and extend the command
+        # if extra_args_str:
+        #     extra_args_list = shlex.split(extra_args_str)
+        #     logger.info(f"Using custom yt-dlp arguments from config: {extra_args_list}")
+        #     # Insert them right after 'yt-dlp':
+        #     command[1:1] = extra_args_list
+        #     # Or place them at the end:
+        #     # command.extend(extra_args_list)
 
         # if use_cookies_file and os.path.exists(cookies_file):
         #     command.extend(["--cookies", cookies_file])
@@ -395,17 +422,27 @@ async def download_audio(url, audio_path):
             url
         ]
 
-        # If there are custom args, parse them into a list and extend the command
+        # <<< ADDED FOR SPECIAL DOMAIN CMDS >>>
+        if domain_args:
+            command[1:1] = domain_args
+
         if extra_args_str:
             extra_args_list = shlex.split(extra_args_str)
             logger.info(f"Using custom yt-dlp arguments from config: {extra_args_list}")
-            # Insert them right after 'yt-dlp':
             command[1:1] = extra_args_list
-            # Or place them at the end:
-            # command.extend(extra_args_list)
 
-        # if use_cookies_file and os.path.exists(cookies_file):
-        #     command.extend(["--cookies", cookies_file])
+        # # /// old method
+        # # If there are custom args, parse them into a list and extend the command
+        # if extra_args_str:
+        #     extra_args_list = shlex.split(extra_args_str)
+        #     logger.info(f"Using custom yt-dlp arguments from config: {extra_args_list}")
+        #     # Insert them right after 'yt-dlp':
+        #     command[1:1] = extra_args_list
+        #     # Or place them at the end:
+        #     # command.extend(extra_args_list)
+
+        # # if use_cookies_file and os.path.exists(cookies_file):
+        # #     command.extend(["--cookies", cookies_file])
 
         # apply the cache logic
         if no_cache_dir:
@@ -593,6 +630,31 @@ async def transcribe_audio(bot, update, audio_path, output_dir, youtube_url, vid
                 created_files[fmt] = file_path
                 logger.info(f"Transcription file {'updated' if fmt == 'txt' and include_header else 'created'}: {file_path}")
 
+        # ---- START: New logic for timestamped TXT ----
+        # Fetch ONLY the specific settings needed for this new file type from config
+        current_transcription_settings = ConfigLoader.get_transcription_settings() # Make sure this function is updated
+        send_as_files_enabled = current_transcription_settings.get('send_as_files', False)
+        send_timestamped_txt_enabled = current_transcription_settings.get('send_timestamped_txt', False)
+
+        if send_as_files_enabled and send_timestamped_txt_enabled:
+            srt_file_path = created_files.get('srt')
+            if srt_file_path and os.path.exists(srt_file_path):
+                timestamped_txt_filename = f"{base_filename}_timestamped.txt"
+                timestamped_txt_path = os.path.join(output_dir, timestamped_txt_filename)
+                
+                # Use the SAME header_content that was prepared above,
+                # which respects the passed-in include_header parameter.
+                success = create_timestamped_txt_from_srt(srt_file_path, timestamped_txt_path, header_content)
+                if success:
+                    created_files['timestamped_txt'] = timestamped_txt_path
+                else:
+                    logger.error(f"Failed to create timestamped TXT file from {srt_file_path}")
+            elif 'srt' not in created_files: # More specific check
+                 logger.warning(f"SRT file ({output_dir}/{base_filename}.srt) was not generated by Whisper, cannot create timestamped TXT.")
+            else: # srt_file_path was in created_files but os.path.exists was false (should be rare)
+                 logger.warning(f"SRT file path found ({srt_file_path}) but file does not exist, cannot create timestamped TXT.")
+        # ---- END: New logic for timestamped TXT ----
+
         # Return created files and raw content for further processing
         return created_files, raw_content
 
@@ -600,10 +662,24 @@ async def transcribe_audio(bot, update, audio_path, output_dir, youtube_url, vid
         logger.error(f"An error occurred during transcription: {e}")
         return {}, ""
 
+# debugger for yt-dlp version
+async def debug_yt_dlp_version():
+    proc = await asyncio.create_subprocess_exec(
+        "yt-dlp", "--version",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    out, err = await proc.communicate()
+    logger.info(f"DEBUG: 'yt-dlp --version' -> {out.decode().strip()}")
 
 # Process the message's URL and keep the user informed
 # (Added in the new GPU logging function call to the process_url_message function)
 async def process_url_message(message_text, bot, update, model, language):
+
+    # fetch delays
+    config = ConfigLoader.get_config()
+    desc_fetch_delay = config.getfloat('Delays', 'descriptionfetchdelay', fallback=0.0)
+
     try:
         # Get transcription settings
         transcription_settings = get_transcription_settings()
@@ -612,6 +688,9 @@ async def process_url_message(message_text, bot, update, model, language):
         gpu_no_gpu   = notification_settings['gpu_message_no_gpu']
         should_send_detailed_info = notification_settings['send_detailed_info']
         send_video_info = notification_settings['send_video_info'] 
+
+        # for yt-dlp version debugging
+        await debug_yt_dlp_version()
 
         logger.info(f"Transcription settings in process_url_message: {transcription_settings}")
 
@@ -645,32 +724,82 @@ async def process_url_message(message_text, bot, update, model, language):
             audio_path = os.path.join(audio_dir, audio_file_name)
             video_info_message = "Transcription initiated."
 
-            # Wrap fetch_video_details in try-except
+            # get the video details first; graceful passthrough if broken
             try:
                 logger.info("Fetching video details...")
                 details = await fetch_video_details(normalized_url)
                 details['video_url'] = normalized_url
-                video_info_message = create_video_info_message(details)
-
-                # Only send if config says so
-                if send_video_info:
-                    for part in split_message(video_info_message):
-                        await bot.send_message(
-                            chat_id=update.effective_chat.id,
-                            text=f"<code>{part}</code>",
-                            parse_mode='HTML'
-                        )
 
             except Exception as e:
-                error_message = str(e)
-                logger.error(f"An error occurred while fetching video details: {error_message}")
-                # await bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Error: {error_message}")
+                # WARN instead of abort
+                logger.warning(f"Could not fetch video details for '{normalized_url}'. Continuing anyway.\nError: {e}")
                 await bot.send_message(
                     chat_id=update.effective_chat.id, 
-                    text=f"❌ Error: {error_message}", 
+                    text="⚠️ WARNING: Could not fetch video description. Continuing with audio download...",
                     disable_web_page_preview=True
                 )
-                continue  # Skip to the next URL if any
+                # Provide a fallback for create_video_info_message()
+                details = {
+                    'title':           '???',
+                    'duration':        0,
+                    'channel':         '???',
+                    'upload_date':     '?',
+                    'views':           '?',
+                    'likes':           '?',
+                    'average_rating':  '?',
+                    'comment_count':   '?',
+                    'channel_id':      '?',
+                    'video_id':        '?',
+                    'video_url':       normalized_url,
+                    'tags':            [],
+                    'description':     'No description available',
+                    'audio_duration':  0
+                }
+
+            # Now create a (possibly placeholder) message
+            video_info_message = create_video_info_message(details)
+
+            # Only send if config says so
+            if send_video_info and video_info_message.strip():
+                for part in split_message(video_info_message):
+                    await bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=f"<code>{part}</code>",
+                        parse_mode='HTML'
+                    )
+
+            # # // (old method)
+            # # Wrap fetch_video_details in try-except
+            # try:
+            #     logger.info("Fetching video details...")
+            #     details = await fetch_video_details(normalized_url)
+            #     details['video_url'] = normalized_url
+            #     video_info_message = create_video_info_message(details)
+
+            #     # Only send if config says so
+            #     if send_video_info:
+            #         for part in split_message(video_info_message):
+            #             await bot.send_message(
+            #                 chat_id=update.effective_chat.id,
+            #                 text=f"<code>{part}</code>",
+            #                 parse_mode='HTML'
+            #             )
+
+            # except Exception as e:
+            #     error_message = str(e)
+            #     logger.error(f"An error occurred while fetching video details: {error_message}")
+            #     # await bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Error: {error_message}")
+            #     await bot.send_message(
+            #         chat_id=update.effective_chat.id, 
+            #         text=f"❌ Error: {error_message}", 
+            #         disable_web_page_preview=True
+            #     )
+            #     continue  # Skip to the next URL if any
+
+            # If we do want to wait after any attempt:
+            if desc_fetch_delay > 0:
+                logger.info(f"Waiting {desc_fetch_delay} second(s) after fetching description...")
+                await asyncio.sleep(desc_fetch_delay)
 
             await bot.send_message(chat_id=update.effective_chat.id, text="📥 Fetching the audio track...")
 
@@ -967,6 +1096,95 @@ Description: {details.get('description', 'No description available')}
 
 # alt; shorten at 1000 chars.
 # Description: {textwrap.shorten(details.get('description', 'No description available'), 1000, placeholder="...")}
+
+# Helper function to format SRT time to either [hh:mm:ss] or [mm:ss]
+def format_srt_time_to_timestamp_prefix(time_str: str) -> str:
+    try:
+        # SRT time format is HH:MM:SS,ms
+        main_time, _ = time_str.split(',')
+        parts = main_time.split(':')
+        
+        if len(parts) == 3:  # Format includes hours: HH:MM:SS
+            hh, mm, ss = parts[0], parts[1], parts[2]
+            return f"[{hh}:{mm}:{ss}]"
+        elif len(parts) == 2:  # Format is only MM:SS
+            mm, ss = parts[0], parts[1]
+            return f"[{mm}:{ss}]"
+        else:
+            # Fallback for any other unexpected format
+            logger.warning(f"Unexpected time format in SRT: {time_str}")
+            return f"[{time_str.split(',')[0]}]"
+            
+    except Exception as e:
+        logger.error(f"Error formatting SRT time '{time_str}': {e}")
+        return f"[{time_str.split(',')[0]}]"  # Return a basic timestamp as fallback
+    
+# Helper function to create timestamped TXT from SRT
+def create_timestamped_txt_from_srt(srt_path: str, output_txt_path: str, header_content: str = "") -> bool:
+    try:
+        # Load the relevant config setting
+        settings = ConfigLoader.get_transcription_settings()
+        should_shorten = settings.get('shorten_timestamps_under_one_hour', True)
+
+        # --- NEW LOGGING BLOCK ---
+        if should_shorten:
+            logger.info("Timestamp formatting: Shortening timestamps for entries under one hour (e.g., [mm:ss]).")
+        else:
+            logger.info("Timestamp formatting: Using full hh:mm:ss format for all entries as per configuration.")
+        # --- END OF NEW LOGGING BLOCK ---
+
+        with open(srt_path, 'r', encoding='utf-8') as srt_file, \
+             open(output_txt_path, 'w', encoding='utf-8') as txt_file:
+            
+            if header_content:
+                txt_file.write(header_content)
+
+            lines = srt_file.read().splitlines()
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
+                if not line:
+                    i += 1
+                    continue
+                
+                try:
+                    # Check if the line is a sequence number
+                    int(line)
+                    if i + 1 < len(lines) and "-->" in lines[i+1]:
+                        time_line = lines[i+1].strip()
+                        start_time_str = time_line.split(" --> ")[0]
+                        
+                        # Get the full timestamp, which will be [hh:mm:ss] if hours are present
+                        full_timestamp = format_srt_time_to_timestamp_prefix(start_time_str)
+                        final_timestamp = full_timestamp
+
+                        # If the setting is on, shorten any timestamp that is under the 1-hour mark
+                        if should_shorten and full_timestamp.startswith('[00:'):
+                            final_timestamp = '[' + full_timestamp[4:]  # Strips '[00:' to leave '[mm:ss]'
+
+                        i += 2
+                        text_block = []
+                        while i < len(lines) and lines[i].strip():
+                            text_block.append(lines[i].strip())
+                            i += 1
+                        
+                        if text_block:
+                            full_text = " ".join(text_block)
+                            txt_file.write(f"{final_timestamp} {full_text}\n")
+                        continue
+                except ValueError:
+                    # Not a sequence number, so we move on
+                    pass
+                i += 1
+                
+        logger.info(f"Successfully created timestamped TXT: {output_txt_path}")
+        return True
+    except FileNotFoundError:
+        logger.error(f"SRT file not found at {srt_path} for generating timestamped TXT.")
+        return False
+    except Exception as e:
+        logger.error(f"Error creating timestamped TXT from {srt_path} to {output_txt_path}: {e}")
+        return False
 
 # Helper function to format duration from seconds to H:M:S
 def format_duration(duration):
